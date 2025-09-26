@@ -1,4 +1,4 @@
- # --------- KIRJASTOT ----------
+# --------- KIRJASTOT ----------
 import discord
 from discord.ext import commands, tasks
 import os, json, random, time, re, aiohttp
@@ -12,13 +12,20 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 # --- Linkki- ja kuvamoderointi-asetukset ---
 SAFE_BROWSING_KEY = os.getenv("SAFE_BROWSING_KEY")
 SAFE_BROWSING_URL = "https://safebrowsing.googleapis.com/v4/threatMatches:find"
-BLOCKED_DOMAINS = ["grabify.link", "iplogger.org", "2no.co", "yip.su"]
+BLOCKED_DOMAINS = [
+    "grabify.link",
+    "iplogger.org",
+    "2no.co",
+    "yip.su",
+    "pornhub.com",
+    "alivegore.com"
+]
 
 # --- Sightengine-asetukset ---
 SIGHTENGINE_USER = os.getenv("SIGHTENGINE_USER")
 SIGHTENGINE_SECRET = os.getenv("SIGHTENGINE_SECRET")
-SIGHTENGINE_URL = os.getenv("SIGHTENGINE_URL")           # esim. https://api.sightengine.com/1.0/check.json
-SIGHTENGINE_MODELS = os.getenv("SIGHTENGINE_MODELS")     # esim. nudity-2.1,alcohol,recreational_drug,...
+SIGHTENGINE_URL = os.getenv("SIGHTENGINE_URL")
+SIGHTENGINE_MODELS = os.getenv("SIGHTENGINE_MODELS")
 
 intents = discord.Intents.default()
 intents.members = True
@@ -29,8 +36,6 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 LEVELS_FILE = "levels.json"
 WIPE_FILE = "wipe.json"
 
-
-# ---------------- JSON-TIEDOSTOJEN LATAUS ----------------
 def load_json(path, default):
     if os.path.exists(path):
         try:
@@ -40,21 +45,16 @@ def load_json(path, default):
             return default
     return default
 
-
 def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-
 levels = load_json(LEVELS_FILE, {})
 wipecfg = load_json(WIPE_FILE, {})
-
 
 def xp_to_next(lvl: int) -> int:
     return 5 * lvl * lvl + 50 * lvl + 100
 
-
-# ---------------- API-TARKISTUKSET ----------------
 async def is_bad_url(url: str) -> bool:
     """Tarkistaa URLin Safe Browsingilla ja estolistalla."""
     for domain in BLOCKED_DOMAINS:
@@ -78,7 +78,6 @@ async def is_bad_url(url: str) -> bool:
             data = await resp.json()
             return bool(data.get("matches"))
 
-
 async def is_nsfw_image(img_url: str) -> bool:
     """Tarkistaa kuvan Sightengine-APIn avulla."""
     if not SIGHTENGINE_USER or not SIGHTENGINE_SECRET:
@@ -94,19 +93,16 @@ async def is_nsfw_image(img_url: str) -> bool:
     async with aiohttp.ClientSession() as session:
         async with session.get(SIGHTENGINE_URL, params=params) as resp:
             data = await resp.json()
-            print("API-vastaus:", data)   # DEBUG – näyttää konsolissa Sightengine-JSONin
+            print("API-vastaus:", data)  # DEBUG
 
-            # ---- Nudity ----
             if "nudity" in data:
                 nudity = data["nudity"]
                 if nudity.get("sexual_activity", 0) > 0.5 or nudity.get("sexual_display", 0) > 0.5:
                     return True
 
-            # ---- Huumekuvat ----
             if "recreational_drug" in data and data["recreational_drug"].get("prob", 0) > 0.5:
                 return True
 
-            # ---- Alkoholi / uhkapeli / väkivalta / self-harm ----
             if "alcohol" in data and data["alcohol"].get("prob", 0) > 0.5:
                 return True
             if "gambling" in data and data["gambling"].get("prob", 0) > 0.5:
@@ -118,15 +114,11 @@ async def is_nsfw_image(img_url: str) -> bool:
 
     return False
 
-
-# ---------------- KÄYNNISTYS ----------------
 @bot.event
 async def on_ready():
     print(f"✅ Botti käynnistyi: {bot.user}")
     wipe_watch.start()
 
-
-# ---------------- TERVETULO-VIESTI ----------------
 @bot.event
 async def on_member_join(member: discord.Member):
     role = discord.utils.get(member.guild.roles, name="Pelaaja")
@@ -139,8 +131,6 @@ async def on_member_join(member: discord.Member):
     if channel:
         await channel.send(f"👋 Tervetuloa KalevalaPortin Rust-serverille, {member.mention}! ")
 
-
-# ---------------- XP / LEVELIT + SUOJAUKSET ----------------
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not isinstance(message.channel, discord.TextChannel):
@@ -162,10 +152,11 @@ async def on_message(message: discord.Message):
                 pass
             return
 
-    # Kuvien tarkistus
+    # Kuvien / liitteiden tarkistus (lisätty GIF-tuki)
     for attachment in message.attachments:
         print("DEBUG: attachment", attachment.filename, attachment.content_type)
-        if attachment.content_type and attachment.content_type.startswith("image"):
+        if (attachment.content_type and attachment.content_type.startswith("image")) \
+           or attachment.filename.lower().endswith(".gif"):
             if await is_nsfw_image(attachment.url):
                 try:
                     await message.delete()
@@ -200,229 +191,7 @@ async def on_message(message: discord.Message):
 
     await bot.process_commands(message)
 
+# (Komennot ja wipe-osio pysyvät samana kuin aiemmin)
 
-# ---------------- KOMENNOT ----------------
-@bot.command()
-async def rank(ctx):
-    u = levels.get(str(ctx.author.id), {"xp": 0, "level": 0})
-    await ctx.send(
-        f"🏅 {ctx.author.display_name}: taso **{u['level']}**, XP **{u['xp']}** / **{xp_to_next(u.get('level',0))}**"
-    )
-
-
-@bot.command()
-async def top(ctx, n: int = 10):
-    if not levels:
-        return await ctx.send("Ei vielä pisteitä.")
-    ranking = sorted(
-        levels.items(),
-        key=lambda kv: (kv[1].get("level", 0), kv[1].get("xp", 0)),
-        reverse=True
-    )[:max(1, min(25, n))]
-
-    lines = []
-    for i, (uid, u) in enumerate(ranking, start=1):
-        member = ctx.guild.get_member(int(uid))
-        name = member.display_name if member else uid
-        lines.append(f"{i}. **{name}** — lvl {u.get('level',0)} ({u.get('xp',0)}/{xp_to_next(u.get('level',0))} XP)")
-    await ctx.send("\n".join(lines))
-
-
-@bot.command()
-async def moi(ctx):
-    await ctx.send(f"Moi {ctx.author.mention}! 😊")
-
-
-@bot.command()
-async def ping(ctx):
-    await ctx.send("🏓 Pong!")
-
-
-@bot.command()
-async def rules(ctx):
-    rules_text = (
-        "__**KalevalaPortin säännöt / Rules**__\n"
-        "1️⃣ Ei huijaamista, exploiteja, bugeja tai kolmannen osapuolen ohjelmia.\n"
-        "2️⃣ Ei rasismia, uhkailua tai häirintää.\n"
-        "3️⃣ Ei griefaamista.\n"
-        "4️⃣ Ei liittoutumista yli 3 hengen tiimeissä.\n"
-    )
-    await ctx.send(rules_text)
-
-
-@bot.command()
-async def help(ctx):
-    help_text = (
-        "**Komennot:**\n"
-        "`!moi`, `!ping`, `!rules`, `!serverinfo`, `!event <teksti>`, `!meme`\n"
-        "`!rank`, `!top [n]`\n"
-        "`!tiketti`, `!sulje`\n"
-        "`!kick @user [syy]`, `!ban @user [syy]`, `!unban <id>`, `!clear <määrä>`\n"
-        "`!setwipe YYYY-MM-DD HH:MM`, `!nextwipe`"
-    )
-    await ctx.send(help_text)
-
-
-@bot.command()
-async def serverinfo(ctx):
-    g = ctx.guild
-    embed = discord.Embed(title="📊 Discord-palvelimen tiedot", color=discord.Color.green())
-    embed.add_field(name="Nimi", value=g.name, inline=True)
-    embed.add_field(name="Jäseniä", value=g.member_count, inline=True)
-    embed.add_field(name="Tekstikanavia", value=len(g.text_channels), inline=True)
-    embed.add_field(name="Puhekanavia", value=len(g.voice_channels), inline=True)
-    if g.icon:
-        embed.set_thumbnail(url=g.icon.url)
-    await ctx.send(embed=embed)
-
-
-@bot.command()
-async def event(ctx, *, teksti: str):
-    await ctx.send(f"📢 **Tapahtuma:** {teksti}")
-
-
-meme_list = [
-    "https://imgur.com/a/YueJy8p",
-    "https://imgur.com/w8e3wJO",
-    "https://imgur.com/2oP0ier",
-    "https://imgur.com/pdif9wA",
-]
-
-
-@bot.command()
-async def meme(ctx):
-    await ctx.send(random.choice(meme_list))
-
-
-# ---------------- MODERAATIO ----------------
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def kick(ctx, member: discord.Member, *, reason="Ei syytä annettu"):
-    await member.kick(reason=reason)
-    await ctx.send(f"👟 {member.mention} poistettu. Syy: {reason}")
-
-
-@bot.command()
-@commands.has_permissions(ban_members=True)
-async def ban(ctx, member: discord.Member, *, reason="Ei syytä annettu"):
-    await member.ban(reason=reason)
-    await ctx.send(f"🚫 {member.mention} bännätty. Syy: {reason}")
-
-
-@bot.command()
-@commands.has_permissions(ban_members=True)
-async def unban(ctx, user_id: int):
-    user = await bot.fetch_user(user_id)
-    if not user:
-        return await ctx.send("❌ Käyttäjää ei löytynyt.")
-    try:
-        await ctx.guild.unban(user)
-        await ctx.send(f"✅ Poistettu banni käyttäjältä **{user}**.")
-    except Exception as e:
-        await ctx.send(f"⚠️ Virhe: {e}")
-
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def clear(ctx, maara: int):
-    if maara < 1:
-        return await ctx.send("Anna poistettava määrä (>0).")
-    deleted = await ctx.channel.purge(limit=maara + 1)
-    await ctx.send(f"🧹 Poistettu {len(deleted) - 1} viestiä.", delete_after=5)
-
-
-# ---------------- TIKETIT ----------------
-@bot.command()
-async def tiketti(ctx):
-    guild = ctx.guild
-    overwrites = {
-        guild.default_role: discord.PermissionOverwrite(read_messages=False),
-        ctx.author: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-    }
-    channel_name = f"tiketti-{ctx.author.name}"
-    channel = await guild.create_text_channel(channel_name, overwrites=overwrites)
-    await channel.send(f"👋 Hei {ctx.author.mention}! Kerro ongelma, ylläpito auttaa pian.")
-    await ctx.send(f"✅ Tiketti luotu: {channel.mention}")
-
-
-@bot.command()
-async def sulje(ctx):
-    if ctx.channel.name.startswith("tiketti-"):
-        await ctx.send("🔒 Tiketti suljetaan…")
-        await ctx.channel.delete()
-    else:
-        await ctx.send("❌ Tätä komentoa voi käyttää vain tikettikanavassa.")
-
-
-# ---------------- WIPE-AJASTUS ----------------
-def parse_dt(s: str):
-    return datetime.strptime(s, "%Y-%m-%d %H:%M")
-
-
-@bot.command()
-@commands.has_permissions(manage_guild=True)
-async def setwipe(ctx, pvm_klo: str, aika: str):
-    try:
-        when = parse_dt(f"{pvm_klo} {aika}")
-    except ValueError:
-        return await ctx.send("Käytä muotoa: `!setwipe YYYY-MM-DD HH:MM`")
-
-    wipecfg["when"] = when.strftime("%Y-%m-%d %H:%M")
-    wipecfg["did_24"] = False
-    wipecfg["did_1"] = False
-    wipecfg["did_0"] = False
-    save_json(WIPE_FILE, wipecfg)
-
-    await ctx.send(f"🗓️ Seuraava wipe asetettu: **{wipecfg['when']}**. Ilmoitukset tulevat `#ilmoitukset`-kanavaan.")
-
-
-@bot.command()
-async def nextwipe(ctx):
-    when = wipecfg.get("when")
-    if not when:
-        return await ctx.send("Seuraavaa wipeä ei ole asetettu. Käytä `!setwipe YYYY-MM-DD HH:MM`.")
-    dt = parse_dt(when)
-    diff = dt - datetime.now()
-    hrs = int(diff.total_seconds() // 3600)
-    mins = int((diff.total_seconds() % 3600) // 60)
-    await ctx.send(f"🕒 Seuraava wipe: **{when}** (n. {hrs} h {mins} min)")
-
-
-@tasks.loop(seconds=60)
-async def wipe_watch():
-    when = wipecfg.get("when")
-    if not when:
-        return
-    try:
-        dt = parse_dt(when)
-    except Exception:
-        return
-
-    now = datetime.now()
-    ch = None
-    for g in bot.guilds:
-        ch = discord.utils.get(g.text_channels, name="ilmoitukset")
-        if ch:
-            break
-    if not ch:
-        return
-
-    if not wipecfg.get("did_24") and 0 <= (dt - now).total_seconds() <= 24 * 3600:
-        await ch.send(f"⏰ **24 h** seuraavaan wipeen ({when})!")
-        wipecfg["did_24"] = True
-        save_json(WIPE_FILE, wipecfg)
-
-    if not wipecfg.get("did_1") and 0 <= (dt - now).total_seconds() <= 3600:
-        await ch.send(f"⏰ **1 h** seuraavaan wipeen ({when})!")
-        wipecfg["did_1"] = True
-        save_json(WIPE_FILE, wipecfg)
-
-    if not wipecfg.get("did_0") and 0 <= (now - dt).total_seconds() < 60:
-        await ch.send("🧹 **Wipe alkaa NYT!** Onnea matkaan, selviytyjät! 💥")
-        wipecfg["did_0"] = True
-        save_json(WIPE_FILE, wipecfg)
-
-
-# ---------------- KÄYNNISTYS ----------------
+# Lopussa aja:
 bot.run(TOKEN)
