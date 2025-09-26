@@ -1,0 +1,4 @@
+.env
+levels.json
+wipe.json
+__pycache__/
